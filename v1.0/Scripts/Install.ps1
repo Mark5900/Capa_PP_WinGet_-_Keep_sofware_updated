@@ -16,7 +16,68 @@ Param(
     [Parameter(Mandatory = $false)]
     [Object]$InputObject = $null
 )
+##############
+# Parameters #
+##############
+$AllowInstallOfWinGet = $false # If $true, will install winget if not found
+# Use https://winget.run to find the id of the apps
+$AppsToUpdate = @(
+    'Lenovo.SystemUpdate',
+    'Microsoft.PowerToys'
+)
 
+#############
+# FUNCTIONS #
+#############
+function Find-WinGet {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $false)]
+        [bool]$AllowInstallOfWinGet = $false,
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$cs
+    )
+    $cs.Log_SectionHeader('Exist-WinGet', 'o')
+
+    if (Get-Command 'winget' -ErrorAction SilentlyContinue) {
+        $cs.Job_WriteLog('WinGet was found!')
+    } else {
+        if ($AllowInstallOfWinGet) {
+            # https://learn.microsoft.com/en-us/windows/package-manager/winget/#install-winget
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
+        } else {
+            $cs.Job_WriteLog('WinGet was not found!')
+            Exit-PSScript 3327 # PACKAGE_CANCELLED_NOT_COMPLIANT
+        }
+    }
+}
+
+function Invoke-UpdateAppWithWinGet {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$AppId,
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$cs
+    )
+    try {
+        $cs.Log_SectionHeader("Update-AppWithWinGet: $AppId", 'o')
+    } catch {
+        $cs.Log_SectionHeader('Update-AppWithWinGet', 'o')
+        $cs.Job_WriteLog("Update-AppWithWinGet: $AppId", 'o')
+    }
+
+    # Will only update if apps is installed and there is a newer version
+    try {
+        $cs.Shell_Execute('winget', "upgrade --id $AppId")
+    } catch {
+        $cs.Job_WriteLog("Error: $($_.Exception.Message)")
+    }
+}
+
+###############
+# Script flow #
+###############
 try {
     ### Download package kit
     [bool]$global:DownloadPackage = $true
@@ -34,7 +95,7 @@ try {
     $cs.Job_WriteLog("[Init]: Starting package: '" + $AppName + "' Release: '" + $AppRelease + "'")
     if (!$cs.Sys_IsMinimumRequiredDiskspaceAvailable('c:', 1500)) { Exit-PSScript 3333 }
     if ($global:DownloadPackage -and $InputObject) { Start-PSDownloadPackage }
-  
+
     $cs.Job_WriteLog("[Init]: `$PackageRoot:` '" + $Packageroot + "'")
     $cs.Job_WriteLog("[Init]: `$AppName:` '" + $AppName + "'")
     $cs.Job_WriteLog("[Init]: `$AppRelease:` '" + $AppRelease + "'")
@@ -42,26 +103,14 @@ try {
     $cs.Job_WriteLog("[Init]: `$TempFolder:` '" + $TempFolder + "'")
     $cs.Job_WriteLog("[Init]: `$DllPath:` '" + $DllPath + "'")
     $cs.Job_WriteLog("[Init]: `$global:DownloadPackage`: '" + $global:DownloadPackage + "'")
-  
-    #Sample of copying file from Package Kit folder
-    #$cs.File_CopyFile("$Packageroot\kit\test.exe","C:\Temp\Test.exe")
 
-    #Sample of executing msi file
-    #$retvalue=$cs.Shell_Execute("msiexec","/i `"$Packageroot\kit\GoogleChromeStandaloneEnterprise64.Msi`" /QN REBOOT=REALLYSUPPRESS ALLUSERS=1")
-    #if ($retvalue -ne 0){Exit-PSScript $retvalue}
-    #$cs.Job_WriteLog("Install:","$AppName completed with status: $retvalue")
-
-    #Sample of executing installer
-    #$retvalue=$cs.Shell_Execute(`"$Packageroot\kit\ProgramInstall.exe`","/SILENT")
-    #if ($retvalue -ne 0){Exit-PSScript $retvalue}
-    #$cs.Job_WriteLog("Install:","$AppName completed with status: $retvalue")
-
-
-    # examples of return codes that are handled by agent caller
-    # 3326 = Retry Later
-    # 3330 = Application already installed
-    # 3010 = Reboot requested
-    # 3333 = Missing disk space
+    ##########
+    # SCRIPT #
+    ##########
+    Find-WinGet -AllowInstallOfWinGet $AllowInstallOfWinGet -cs $cs
+    foreach ($App in $AppsToUpdate) {
+        Invoke-UpdateAppWithWinGet -AppId $App -cs $cs
+    }
 
     Exit-PSScript $Error
 
