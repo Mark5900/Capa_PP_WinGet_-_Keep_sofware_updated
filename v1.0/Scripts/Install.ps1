@@ -19,11 +19,12 @@ Param(
 ##############
 # Parameters #
 ##############
-$AllowInstallOfWinGet = $false # If $true, will install winget if not found
+$AllowInstallOfWinGet = $true # If $true, will install winget if not found
 # Use https://winget.run to find the id of the apps
 $AppsToUpdate = @(
     'Lenovo.SystemUpdate',
-    'Microsoft.PowerToys'
+    'Microsoft.PowerToys',
+    'Microsoft.PowerShell'
 )
 
 #############
@@ -37,19 +38,34 @@ function Find-WinGet {
         [Parameter(Mandatory = $true)]
         [pscustomobject]$cs
     )
-    $cs.Log_SectionHeader('Exist-WinGet', 'o')
+    $cs.Log_SectionHeader('Find-WinGet', 'o')
 
     if (Get-Command 'winget' -ErrorAction SilentlyContinue) {
-        $cs.Job_WriteLog('WinGet was found!')
+        $cs.Job_WriteLog('WinGet was found')
     } else {
         if ($AllowInstallOfWinGet) {
             # https://learn.microsoft.com/en-us/windows/package-manager/winget/#install-winget
-            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
+            try {
+                Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
+                $cs.Job_WriteLog('WinGet was installed')
+            } catch {
+                $cs.Job_WriteLog('Error - WinGet was not installed')
+                $line = $_.InvocationInfo.ScriptLineNumber
+                $cs.Job_WriteLog('*****************', "Something bad happend at line $($line): $($_.Exception.Message)")
+                Exit-PSScript $_.Exception.HResult
+            }
         } else {
-            $cs.Job_WriteLog('WinGet was not found!')
+            $cs.Job_WriteLog('WinGet was not found')
             Exit-PSScript 3327 # PACKAGE_CANCELLED_NOT_COMPLIANT
         }
     }
+
+    $ResolveWingetPath = Resolve-Path 'C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe'
+    if ($ResolveWingetPath) {
+        $WingetPath = $ResolveWingetPath[-1].Path
+    }
+    $cs.Job_WriteLog("WinGet path: $WingetPath")
+    return $WingetPath
 }
 
 function Invoke-UpdateAppWithWinGet {
@@ -58,7 +74,9 @@ function Invoke-UpdateAppWithWinGet {
         [Parameter(Mandatory = $true)]
         [string]$AppId,
         [Parameter(Mandatory = $true)]
-        [pscustomobject]$cs
+        [pscustomobject]$cs,
+        [Parameter(Mandatory = $true)]
+        [string]$WingetPath
     )
     try {
         $cs.Log_SectionHeader("Update-AppWithWinGet: $AppId", 'o')
@@ -69,7 +87,13 @@ function Invoke-UpdateAppWithWinGet {
 
     # Will only update if apps is installed and there is a newer version
     try {
-        $cs.Shell_Execute('winget', "upgrade --id $AppId")
+        #cmd.exe /c "winget.exe upgrade --id $AppId"
+        $cs.Shell_Execute('cmd.exe', "/c `"winget.exe upgrade --id $AppId --accept-package-agreements --accept-source-agreements --force`"", $true, '0', $false, $WingetPath)
+
+        #$ExePath = Join-Path $WingetPath 'winget.exe'
+        #$cs.Shell_Execute($ExePath, "upgrade --id $AppId --accept-package-agreements --accept-source-agreements --force", $true, '0', $false, $WingetPath)
+
+        #$cs.Shell_Execute('winget.exe', "upgrade --id $AppId", $true, '0', $false, $WingetPath)
     } catch {
         $cs.Job_WriteLog("Error: $($_.Exception.Message)")
     }
@@ -107,12 +131,13 @@ try {
     ##########
     # SCRIPT #
     ##########
-    Find-WinGet -AllowInstallOfWinGet $AllowInstallOfWinGet -cs $cs
+    $WingetPath = Find-WinGet -AllowInstallOfWinGet $AllowInstallOfWinGet -cs $cs
+    Set-Location $WingetPath
     foreach ($App in $AppsToUpdate) {
-        Invoke-UpdateAppWithWinGet -AppId $App -cs $cs
+        Invoke-UpdateAppWithWinGet -AppId $App -cs $cs -WingetPath $WingetPath
     }
 
-    Exit-PSScript $Error
+    Exit-PSScript 3300
 
 } catch {
     $line = $_.InvocationInfo.ScriptLineNumber
